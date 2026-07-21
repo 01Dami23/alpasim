@@ -36,12 +36,12 @@ class ControllerEvent(RecurringEvent):
 
         # --- Sanity checks ---
         assert ctx is not None, "StepContext missing — PolicyEvent did not run"
-        assert (
-            ctx.step_start_us == self.timestamp_us
-        ), f"StepContext timestamp mismatch: {ctx.step_start_us} != {self.timestamp_us}"
-        assert (
-            ctx.driver_trajectory is not None
-        ), "driver_trajectory not set by PolicyEvent"
+        assert ctx.step_start_us == self.timestamp_us, (
+            f"StepContext timestamp mismatch: {ctx.step_start_us} != {self.timestamp_us}"
+        )
+        assert (ctx.driver_trajectory is None) != (ctx.direct_control is None), (
+            "PolicyEvent must set exactly one driver decision"
+        )
 
         # --- Controller + vehicle model ---
         ctx.ego_true, ctx.ego_estimated = await self._run_controller(state)
@@ -62,7 +62,8 @@ class ControllerEvent(RecurringEvent):
         target_time_us = ctx.target_time_us
         force_gt = ctx.force_gt
         reference_trajectory_of_rig_in_local = ctx.driver_trajectory
-        assert reference_trajectory_of_rig_in_local is not None
+        direct_control = ctx.direct_control
+        fallback_trajectory_local_to_rig: geometry.Trajectory | None
 
         pose_local_to_rig = state.ego_trajectory.last_pose
 
@@ -85,6 +86,7 @@ class ControllerEvent(RecurringEvent):
             reference_trajectory_of_rig_in_local = controller_reference_trajectory(
                 state.force_gt_trajectory, step_start_us
             )
+            direct_control = None
 
             dt = (target_time_us - step_start_us) / 1e6
             pose_local_to_rig_t0 = state.force_gt_trajectory.interpolate_pose(
@@ -107,11 +109,16 @@ class ControllerEvent(RecurringEvent):
 
             fallback_trajectory_local_to_rig = reference_trajectory_of_rig_in_local
 
-        planner_delay_buffer.add(
-            reference_trajectory_of_rig_in_local.transform(pose_local_to_rig.inverse()),
-            step_start_us,
-        )
-        rig_reference_trajectory = planner_delay_buffer.at(step_start_us)
+        if reference_trajectory_of_rig_in_local is None:
+            rig_reference_trajectory = None
+        else:
+            planner_delay_buffer.add(
+                reference_trajectory_of_rig_in_local.transform(
+                    pose_local_to_rig.inverse()
+                ),
+                step_start_us,
+            )
+            rig_reference_trajectory = planner_delay_buffer.at(step_start_us)
 
         pose_rig0_to_rig1 = pose_local_to_rig_t0.inverse() @ pose_local_to_rig_t1
         rig_linear_velocity_in_rig = pose_rig0_to_rig1.vec3 / dt
@@ -123,6 +130,7 @@ class ControllerEvent(RecurringEvent):
             rig_linear_velocity_in_rig=rig_linear_velocity_in_rig,
             rig_angular_velocity_in_rig=rig_angular_velocity_in_rig,
             rig_reference_trajectory_in_rig=rig_reference_trajectory,
+            direct_control=direct_control,
             future_us=target_time_us,
             force_gt=force_gt,
             fallback_trajectory_local_to_rig=fallback_trajectory_local_to_rig,

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+from alpasim_grpc.v0.controller_pb2 import DirectControl
 from alpasim_runtime.events.base import (
     EndSimulationException,
     EventPriority,
@@ -59,9 +60,9 @@ class PolicyEvent(RecurringEvent):
         svc = self.services
 
         # --- Step boundary: fill timing on existing StepContext ---
-        assert (
-            state.step_context is not None
-        ), "StepContext must exist before PolicyEvent (created by StepEvent)"
+        assert state.step_context is not None, (
+            "StepContext must exist before PolicyEvent (created by StepEvent)"
+        )
         state.step_context.step_start_us = step_start_us
         state.step_context.target_time_us = target_time_us
         state.step_context.force_gt = target_time_us in state.unbound.force_gt_period
@@ -130,7 +131,7 @@ class PolicyEvent(RecurringEvent):
             return
 
         # --- Driver query ---
-        drive_trajectory_noisy, terminate_session = await svc.driver.drive(
+        decision, terminate_session = await svc.driver.drive(
             time_now_us=step_start_us,
             time_query_us=target_time_us,
             renderer_data=state.data_sensorsim_to_driver,
@@ -143,9 +144,15 @@ class PolicyEvent(RecurringEvent):
             )
             raise EndSimulationException()
 
+        if isinstance(decision, DirectControl):
+            state.step_context.direct_control = decision
+            return
+        if decision is None:
+            raise ValueError("Driver returned no decision")
+
         # --- Transform from noisy to true local frame ---
         drive_trajectory = transform_trajectory_from_noisy_to_true_local_frame(
-            state, drive_trajectory_noisy
+            state, decision
         )
         state.step_context.driver_trajectory = drive_trajectory
 

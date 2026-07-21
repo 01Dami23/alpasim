@@ -11,6 +11,7 @@ from typing import Type
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import DynamicState
+from alpasim_grpc.v0.controller_pb2 import DirectControl
 from alpasim_grpc.v0.egodriver_pb2 import (
     DriveRequest,
     DriveResponse,
@@ -205,13 +206,12 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
     async def drive(
         self, time_now_us: int, time_query_us: int, renderer_data: bytes | None
-    ) -> tuple[Trajectory, bool]:
+    ) -> tuple[Trajectory | DirectControl | None, bool]:
         """Request a drive decision for the current session.
 
         Returns:
-            Tuple of (trajectory, terminate_session).  When terminate_session
-            is True the caller should terminate the rollout immediately
-            without completing the remainder of the step.
+            Tuple of (trajectory or direct control, terminate_session). When
+            terminate_session is true the decision may be absent.
         """
         session_info = self._require_session_info()
         # Create request with both old and new fields for backward compatibility
@@ -262,4 +262,15 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
         await session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
-        return trajectory_from_grpc(response.trajectory), response.terminate_session
+        decision = response.WhichOneof("decision")
+        if decision == "trajectory":
+            return trajectory_from_grpc(response.trajectory), response.terminate_session
+        if decision == "direct_control":
+            direct_control = DirectControl()
+            direct_control.CopyFrom(response.direct_control)
+            return direct_control, response.terminate_session
+        if response.terminate_session:
+            return None, True
+        raise ValueError(
+            "Driver response contains neither trajectory nor direct control"
+        )

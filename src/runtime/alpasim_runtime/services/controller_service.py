@@ -12,6 +12,7 @@ from typing import Type
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import DynamicState, Vec3
 from alpasim_grpc.v0.controller_pb2 import (
+    DirectControl,
     RunControllerAndVehicleModelRequest,
     VDCSessionCloseRequest,
     VDCSessionRequest,
@@ -58,9 +59,10 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         pose_local_to_rig: Pose,
         rig_linear_velocity_in_rig: np.ndarray,
         rig_angular_velocity_in_rig: np.ndarray,
-        rig_reference_trajectory_in_rig: Trajectory,
+        rig_reference_trajectory_in_rig: Trajectory | None,
         future_us: int,
         force_gt: bool,
+        direct_control: DirectControl | None = None,
         pose_reporting_interval_us: int = 0,
     ) -> RunControllerAndVehicleModelRequest:
         """
@@ -86,9 +88,15 @@ class ControllerService(ServiceBase[VDCServiceStub]):
             )
         )
 
-        request.planned_trajectory_in_rig.CopyFrom(
-            trajectory_to_grpc(rig_reference_trajectory_in_rig)
-        )
+        if (rig_reference_trajectory_in_rig is None) == (direct_control is None):
+            raise ValueError("Exactly one controller command must be provided")
+        if direct_control is not None:
+            request.direct_control.CopyFrom(direct_control)
+        else:
+            assert rig_reference_trajectory_in_rig is not None
+            request.planned_trajectory_in_rig.CopyFrom(
+                trajectory_to_grpc(rig_reference_trajectory_in_rig)
+            )
 
         request.future_time_us = future_us
 
@@ -132,7 +140,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
     @staticmethod
     def _ensure_intermediates(
         propagated_states: list[PropagatedPosesAtTime],
-        fallback_trajectory_local_to_rig: Trajectory,
+        fallback_trajectory_local_to_rig: Trajectory | None,
         now_us: int,
         future_us: int,
         pose_reporting_interval_us: int,
@@ -158,6 +166,10 @@ class ControllerService(ServiceBase[VDCServiceStub]):
 
         has_intermediates = len(propagated_states) > 1
         if not has_intermediates and expected_intermediate_timestamps:
+            if fallback_trajectory_local_to_rig is None:
+                raise ValueError(
+                    "Direct-control response omitted requested intermediate states"
+                )
             logger.debug(
                 "Generating %d intermediate states by interpolation",
                 len(expected_intermediate_timestamps),
@@ -188,10 +200,11 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         pose_local_to_rig: Pose,
         rig_linear_velocity_in_rig: np.ndarray,
         rig_angular_velocity_in_rig: np.ndarray,
-        rig_reference_trajectory_in_rig: Trajectory,
+        rig_reference_trajectory_in_rig: Trajectory | None,
         future_us: int,
         force_gt: bool,
-        fallback_trajectory_local_to_rig: Trajectory,
+        fallback_trajectory_local_to_rig: Trajectory | None,
+        direct_control: DirectControl | None = None,
         pose_reporting_interval_us: int = 0,
     ) -> list[PropagatedPosesAtTime]:
         """Run controller and vehicle model to propagate the ego pose to *future_us*.
@@ -201,7 +214,8 @@ class ControllerService(ServiceBase[VDCServiceStub]):
             pose_local_to_rig: Current ego pose in local frame.
             rig_linear_velocity_in_rig: Linear velocity vector in rig frame.
             rig_angular_velocity_in_rig: Angular velocity vector in rig frame.
-            rig_reference_trajectory_in_rig: Planned reference trajectory in rig frame.
+            rig_reference_trajectory_in_rig: Optional planned reference trajectory.
+            direct_control: Optional physical command applied without MPC.
             future_us: Target timestamp to propagate to.
             force_gt: If True, coerce the vehicle model to use ground-truth state.
             fallback_trajectory_local_to_rig: Trajectory used in skip mode or
@@ -217,6 +231,10 @@ class ControllerService(ServiceBase[VDCServiceStub]):
 
         # Skip expensive gRPC request construction when in skip mode
         if self.skip:
+            if fallback_trajectory_local_to_rig is None:
+                raise ValueError(
+                    "Controller skip mode cannot execute a direct-control decision"
+                )
             logger.debug("Skip mode: controller returning fallback pose")
             fallback_pose_local_to_rig = (
                 fallback_trajectory_local_to_rig.interpolate_pose(future_us)
@@ -245,6 +263,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
             rig_linear_velocity_in_rig=rig_linear_velocity_in_rig,
             rig_angular_velocity_in_rig=rig_angular_velocity_in_rig,
             rig_reference_trajectory_in_rig=rig_reference_trajectory_in_rig,
+            direct_control=direct_control,
             future_us=future_us,
             force_gt=force_gt,
             pose_reporting_interval_us=pose_reporting_interval_us,
@@ -264,6 +283,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         # When force_gt, ignore the controller response and populate from the
         # fallback (ground-truth) trajectory so downstream always sees GT poses.
         if force_gt:
+            assert fallback_trajectory_local_to_rig is not None
             fallback_pose_local_to_rig = (
                 fallback_trajectory_local_to_rig.interpolate_pose(future_us)
             )

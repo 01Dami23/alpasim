@@ -6,6 +6,7 @@ syntax = "proto3";
 package egodriver;
 
 import "alpasim_grpc/v0/common.proto";
+import "alpasim_grpc/v0/controller.proto";
 import "alpasim_grpc/v0/sensorsim.proto";
 
 service EgodriverService {
@@ -107,8 +108,13 @@ message DriveRequest {
 }
 
 message DriveResponse {
-    // The drive_response trajectory stores the active transform local->rig_est produced by the driver (see CONTRIBUTING.md, "Coordinate Systems").
-    common.Trajectory trajectory = 2;
+    oneof decision {
+        // The drive_response trajectory stores the active transform local->rig_est produced by the driver (see CONTRIBUTING.md, "Coordinate Systems").
+        common.Trajectory trajectory = 2;
+
+        // Physical command to apply directly to the vehicle model without MPC.
+        controller.DirectControl direct_control = 5;
+    }
     message DebugInfo {
         // for iteration speed, the implementer of egodriver can choose to log arbitrary binary messages
         // for which they write their own (de)serialization. Once proven to be useful they may be

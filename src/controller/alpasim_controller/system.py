@@ -15,6 +15,7 @@ different implementations (LinearMPC, NonlinearMPC) to be chosen at runtime.
 """
 
 import logging
+import math
 
 import numpy as np
 from alpasim_controller.mpc_controller import (
@@ -35,6 +36,12 @@ from alpasim_utils.geometry import (
 
 __all__ = ["System", "VehicleModel", "create_system"]
 
+# Protobuf stores these values as float32, so validate against their wire values.
+MIN_STEERING_ANGLE_RAD = float(np.float32(-math.pi / 4))
+MAX_STEERING_ANGLE_RAD = float(np.float32(math.pi / 4))
+MIN_LONGITUDINAL_ACCELERATION_MPS2 = -8.0
+MAX_LONGITUDINAL_ACCELERATION_MPS2 = 6.0
+
 
 class System:
     """Vehicle simulation system vehicle model and controller."""
@@ -53,7 +60,7 @@ class System:
             controller: MPCController instance to use for control computation
         """
         self._timestamp_us = initial_state_grpc.timestamp_us
-        self._reference_trajectory = None
+        self._reference_trajectory: Trajectory | None = None
         initial_pose = pose_from_grpc(initial_state_grpc.pose)
         self._trajectory = Trajectory.from_poses(
             timestamps=np.array([initial_state_grpc.timestamp_us], dtype=np.uint64),
@@ -118,8 +125,16 @@ class System:
                 f"Timestamp mismatch: expected {self._timestamp_us}, "
                 f"got {request.state.timestamp_us}"
             )
-        if len(request.planned_trajectory_in_rig.poses) == 0:
+        command = request.WhichOneof("command")
+        if command is None:
+            raise ValueError("Controller request contains no command")
+        if (
+            command == "planned_trajectory_in_rig"
+            and len(request.planned_trajectory_in_rig.poses) == 0
+        ):
             raise ValueError("Planned trajectory is empty")
+        if command == "direct_control":
+            self._validate_direct_control(request.direct_control)
         if request.future_time_us <= request.state.timestamp_us:
             raise ValueError(
                 f"future_time_us ({request.future_time_us}) must be greater than "
@@ -145,10 +160,12 @@ class System:
         corrected_pose = pose_from_grpc(request.state.pose)
         self._trajectory.set_pose(-1, corrected_pose)
 
-        # Store the reference trajectory
-        self._reference_trajectory = trajectory_from_grpc(
-            request.planned_trajectory_in_rig
-        )
+        if command == "planned_trajectory_in_rig":
+            self._reference_trajectory = trajectory_from_grpc(
+                request.planned_trajectory_in_rig
+            )
+        else:
+            self._reference_trajectory = None
 
         # Setup and execute the MPC
         # Reinitialize the state
@@ -168,14 +185,26 @@ class System:
         else:
             reporting_timestamps = set()
 
-        # MPC run times
         start_time_us = self._timestamp_us
-        dt_mpc_us = int(1e6 * self._controller.dt_mpc)
-        if self._last_mpc_time_us is not None:
-            first_mpc_time = self._last_mpc_time_us + dt_mpc_us
+        if command == "direct_control":
+            self.control_input = np.array(
+                [
+                    request.direct_control.front_wheel_steering_angle_rad,
+                    request.direct_control.longitudinal_acceleration_mps2,
+                ]
+            )
+            self._last_mpc_time_us = None
+            self._solve_time_ms = 0.0
+            mpc_run_times: set[int] = set()
         else:
-            first_mpc_time = start_time_us
-        mpc_run_times = set(range(first_mpc_time, request.future_time_us, dt_mpc_us))
+            dt_mpc_us = int(1e6 * self._controller.dt_mpc)
+            if self._last_mpc_time_us is not None:
+                first_mpc_time = self._last_mpc_time_us + dt_mpc_us
+            else:
+                first_mpc_time = start_time_us
+            mpc_run_times = set(
+                range(first_mpc_time, request.future_time_us, dt_mpc_us)
+            )
 
         # Build sorted list of all timestamps to step to: MPC period
         # boundaries (excluding start, which we're already at), reporting
@@ -216,6 +245,29 @@ class System:
         return controller_pb2.RunControllerAndVehicleModelResponse(
             states=reported_states,
         )
+
+    @staticmethod
+    def _validate_direct_control(control: controller_pb2.DirectControl) -> None:
+        """Validate one physical command before advancing the vehicle model."""
+        steering = control.front_wheel_steering_angle_rad
+        acceleration = control.longitudinal_acceleration_mps2
+        if not math.isfinite(steering) or not math.isfinite(acceleration):
+            raise ValueError("Direct-control values must be finite")
+        if not MIN_STEERING_ANGLE_RAD <= steering <= MAX_STEERING_ANGLE_RAD:
+            raise ValueError(
+                "Direct steering must be within "
+                f"[{MIN_STEERING_ANGLE_RAD}, {MAX_STEERING_ANGLE_RAD}] rad"
+            )
+        if not (
+            MIN_LONGITUDINAL_ACCELERATION_MPS2
+            <= acceleration
+            <= MAX_LONGITUDINAL_ACCELERATION_MPS2
+        ):
+            raise ValueError(
+                "Direct acceleration must be within "
+                f"[{MIN_LONGITUDINAL_ACCELERATION_MPS2}, "
+                f"{MAX_LONGITUDINAL_ACCELERATION_MPS2}] m/s^2"
+            )
 
     def _build_dynamic_state_in_rig_frame(self) -> common_pb2.DynamicState:
         """

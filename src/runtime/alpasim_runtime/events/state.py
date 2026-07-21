@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Coroutine
 
+from alpasim_grpc.v0.controller_pb2 import DirectControl
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn
 from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.delay_buffer import DelayBuffer
@@ -63,6 +64,8 @@ class StepContext:
     # PolicyEvent → ControllerEvent
     # Driver output transformed to the true local frame.
     driver_trajectory: geometry.Trajectory | None = None
+    # Physical vehicle command; it needs no coordinate-frame transformation.
+    direct_control: DirectControl | None = None
 
     # ControllerEvent → PhysicsEvent(EGO) + StepEvent
     # True ego state from controller (poses + dynamics).

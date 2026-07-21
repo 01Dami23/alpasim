@@ -17,6 +17,14 @@ service VDCService {
   }
 }
 
+message DirectControl {
+  // Target front-wheel steering angle in radians.
+  float front_wheel_steering_angle_rad = 1;
+
+  // Target longitudinal acceleration in metres per second squared.
+  float longitudinal_acceleration_mps2 = 2;
+}
+
 message VDCSessionRequest {
     string session_uuid = 1;
 
@@ -40,9 +48,14 @@ message RunControllerAndVehicleModelRequest {
   // - angular and linear rates are resolved in the rig frame
   common.StateAtTime state = 2;
 
-  // Desired trajectory expressed in the rig frame at the timestamp of the first pose.
-  // Each pose is relative to the rig origin.
-  common.Trajectory planned_trajectory_in_rig = 3;
+  oneof command {
+    // Desired trajectory expressed in the rig frame at the timestamp of the first pose.
+    // Each pose is relative to the rig origin.
+    common.Trajectory planned_trajectory_in_rig = 3;
+
+    // Physical command applied directly to the vehicle model without running MPC.
+    DirectControl direct_control = 7;
+  }
 
   // The requested timestamp at the end of the propagation.
   int64 future_time_us = 4;
