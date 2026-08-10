@@ -35,6 +35,11 @@ class MapElements(StrEnum):
     ROAD_EDGE = "road_edge"
     STOP_LINE = "stop_line"
     OTHER_LINE = "other_line"
+    CROSSWALK = "crosswalk"
+    ROAD_AREA = "road_area"
+    ROAD_ISLAND = "road_island"
+    PED_WALKWAY = "ped_walkway"
+    TRAFFIC_SIGN = "traffic_sign"
     # The ground truth trajectory as line on the road.
     GT_LINESTRING = "gt_linestring"
     # A "ghost" car driving the ground truth trajectory.
@@ -45,6 +50,10 @@ class MapElements(StrEnum):
     ROUTE = "route"
     # All other agents in the scene.
     AGENTS = "agents"
+    # Traffic model forecast trajectories for non-static agents.
+    TRAFFIC_PREDICTIONS = "traffic_predictions"
+    # Text labels for visible non-ego actor IDs.
+    AGENT_IDS = "agent_ids"
 
 
 class VideoLayout(StrEnum):
@@ -130,10 +139,18 @@ class ImageScorerConfig:
 
 
 @dataclass
+class OpenLoopCollisionScorerConfig:
+    # Horizon in seconds: how far into each planned trajectory to check for
+    # collisions against surrounding agents' recorded trajectories.
+    horizon_s: float = MISSING
+
+
+@dataclass
 class ScorersConfig:
     min_ade: MinADEScorerConfig = MISSING
     plan_deviation: PlanDeviationScorerConfig = MISSING
     image: ImageScorerConfig = MISSING
+    open_loop_collision: OpenLoopCollisionScorerConfig = MISSING
 
 
 @dataclass

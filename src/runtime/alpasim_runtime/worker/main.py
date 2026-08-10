@@ -21,15 +21,16 @@ import logging
 import multiprocessing as mp
 import os
 import sys
-import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import Queue
 from queue import Empty as QueueEmpty
 
+from alpasim_grpc.v0 import runtime_pb2
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import RendererKind, UserSimulatorConfig
+from alpasim_runtime.errors import RolloutError
 from alpasim_runtime.event_loop import create_event_rollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
 from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
@@ -41,7 +42,10 @@ from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.services.video_model_service import VideoModelService
 from alpasim_runtime.telemetry.rpc_wrapper import set_shared_rpc_tracking
-from alpasim_runtime.telemetry.telemetry_context import TelemetryContext
+from alpasim_runtime.telemetry.telemetry_context import (
+    TelemetryContext,
+    try_get_context,
+)
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
@@ -176,6 +180,11 @@ async def run_single_rollout(
             error=str(exc),
             error_traceback=tb,
             rollout_uuid=rollout.rollout_uuid if rollout else None,
+            error_code=(
+                exc.error_code
+                if isinstance(exc, RolloutError)
+                else runtime_pb2.ROLLOUT_ERROR_CODE_UNSPECIFIED
+            ),
         )
 
 
@@ -275,19 +284,32 @@ async def run_worker_loop(
                 shutdown_event.set()
                 break
 
-            # Process the job
-            result = await run_single_rollout(
-                job=job,
-                user_config=user_config,
-                data_source=scene_loader.get_data_source(job.scene_id),
-                camera_catalog=camera_catalog,
-                version_ids=version_ids,
-                rollouts_dir=rollouts_dir,
-                eval_config=eval_config,
-                eval_executor=eval_executor,
-            )
+            telemetry_ctx = try_get_context()
+            if telemetry_ctx is not None:
+                telemetry_ctx.record_renderer_rollout_started(
+                    dispatch_kind=job.dispatch_kind,
+                    scheduler_wait_seconds=job.scheduler_wait_seconds,
+                )
+            try:
+                result = await run_single_rollout(
+                    job=job,
+                    user_config=user_config,
+                    data_source=scene_loader.get_data_source(job.scene_id),
+                    camera_catalog=camera_catalog,
+                    version_ids=version_ids,
+                    rollouts_dir=rollouts_dir,
+                    eval_config=eval_config,
+                    eval_executor=eval_executor,
+                )
+            finally:
+                if telemetry_ctx is not None:
+                    telemetry_ctx.record_renderer_rollout_stopped()
             result_queue.put(result)
             rollout_count += 1
+            if telemetry_ctx is not None:
+                telemetry_ctx.record_rollout_finished(
+                    "completed" if result.success else "failed"
+                )
 
     # Spawn num_consumers consumer tasks -- each handles one job at a time
     try:
@@ -325,7 +347,6 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     txt_logs_dir = os.path.join(args.log_dir, "txt-logs")
     rollouts_dir = os.path.join(args.log_dir, "rollouts")
-    telemetry_dir = os.path.join(args.log_dir, "telemetry")
     os.makedirs(txt_logs_dir, exist_ok=True)
 
     # Configure logging with worker_id in format.
@@ -360,16 +381,13 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     camera_catalog = CameraCatalog(user_config.extra_cameras)
 
-    start_time = time.perf_counter()
-
-    # TelemetryContext for telemetry collection.
-    # Worker 0 samples resources (CPU/GPU); other workers only collect RPC/rollout/step timing.
+    # TelemetryContext for live Prometheus scraping.
     async with TelemetryContext(
-        output_dir=telemetry_dir,
+        port=args.telemetry_port,
         worker_id=args.worker_id,
-        sample_resources=(args.worker_id == 0),
-    ) as ctx:
-        rollout_count = await run_worker_loop(
+        job_queue_depth_fn=args.job_queue.qsize,
+    ):
+        await run_worker_loop(
             worker_id=args.worker_id,
             job_queue=args.job_queue,
             result_queue=args.result_queue,
@@ -382,9 +400,5 @@ async def worker_async_main(args: WorkerArgs) -> None:
             eval_config=args.eval_config,
             parent_pid=args.parent_pid,
         )
-
-        # Record simulation summary with actual measured values
-        total_time = time.perf_counter() - start_time
-        ctx.record_simulation_summary(total_time, rollout_count)
 
     module_logger.info("Worker %d exiting", args.worker_id)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from uuid import uuid4
@@ -86,6 +87,7 @@ def build_simulation_return(
                     success=result.success,
                     rollout_uuid=result.rollout_uuid or "",
                     error=result.error or "",
+                    error_code=result.error_code,
                     timestep_metrics=_build_timestep_metrics(result),
                     aggregated_metrics=_build_aggregated_metrics(result),
                 )
@@ -157,6 +159,7 @@ class InvalidRequestError(ValueError):
 
 def build_pending_jobs_from_request(
     request: runtime_pb2.SimulationRequest,
+    request_id: str,
     has_scene: Callable[[str], bool],
 ) -> list[PendingRolloutJob]:
     """Expand a SimulationRequest into individual PendingRolloutJob entries.
@@ -166,6 +169,7 @@ def build_pending_jobs_from_request(
 
     Args:
         request: The simulation request to expand.
+        request_id: Identifier stamped onto every job for result routing.
         has_scene: Callable that returns True for known scene_ids.
 
     Raises:
@@ -194,6 +198,7 @@ def build_pending_jobs_from_request(
         for rollout_idx in range(spec.nr_rollouts):
             jobs.append(
                 PendingRolloutJob(
+                    request_id=request_id,
                     job_id=uuid4().hex,
                     scene_id=spec.scenario_id,
                     rollout_spec_index=spec_index,
@@ -274,19 +279,37 @@ class DaemonEngine:
             nr_workers=runtime_context.config.user.nr_workers,
         )
 
-        worker_runtime = start_worker_runtime(
-            config=runtime_context.config,
-            user_config_path=self._user_config_path,
-            num_consumers=num_consumers_per_worker,
-            log_dir=self._log_dir,
-            eval_config=runtime_context.eval_config,
-            version_ids=runtime_context.version_ids,
-        )
+        worker_runtime: WorkerRuntime | None = None
+        try:
+            worker_runtime = start_worker_runtime(
+                config=runtime_context.config,
+                user_config_path=self._user_config_path,
+                num_consumers=num_consumers_per_worker,
+                log_dir=self._log_dir,
+                eval_config=runtime_context.eval_config,
+                version_ids=runtime_context.version_ids,
+            )
 
-        scheduler = DaemonScheduler(
-            pools=runtime_context.pools,
-            runtime=worker_runtime,
-        )
+            affine_config = runtime_context.config.user.scene_affine_dispatch
+            scheduler = DaemonScheduler(
+                pools=runtime_context.pools,
+                runtime=worker_runtime,
+                scene_affine_dispatch=affine_config,
+                max_rollout_retries=runtime_context.config.user.max_rollout_retries,
+                rollouts_dir=os.path.join(self._log_dir, "rollouts"),
+            )
+        except Exception:
+            if worker_runtime is not None:
+                await worker_runtime.stop()
+            raise
+
+        try:
+            if affine_config.enabled:
+                await scheduler.warm_start()
+        except BaseException:
+            await scheduler.shutdown(reason="warm_start failed")
+            await worker_runtime.stop()
+            raise
 
         self._version_ids = runtime_context.version_ids
         self._runtime_context = runtime_context
@@ -326,7 +349,7 @@ class DaemonEngine:
         request_id = uuid4().hex
 
         try:
-            jobs = build_pending_jobs_from_request(request, self._has_scene)
+            jobs = build_pending_jobs_from_request(request, request_id, self._has_scene)
         except UnknownSceneError as exc:
             raise InvalidRequestError(str(exc)) from exc
 

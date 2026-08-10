@@ -509,8 +509,6 @@ class EventBasedRollout:
             )
 
             # Create traffic session
-            gt_ego_aabb_trajectory = _build_traffic_session_trajectory(self.unbound)
-
             await async_stack.enter_async_context(
                 self.trafficsim.rollout_session(
                     uuid=str(self.unbound.rollout_uuid),
@@ -519,8 +517,12 @@ class EventBasedRollout:
                         traffic_objs=self.unbound.traffic_objs,
                         scene_id=self.unbound.scene_id,
                         ego_aabb=self.unbound.ego_aabb,
-                        gt_ego_aabb_trajectory=gt_ego_aabb_trajectory,
+                        gt_ego_aabb_trajectory=_build_traffic_session_trajectory(
+                            self.unbound
+                        ),
                         start_timestamp_us=self.unbound.egomotion_context_start_us,
+                        force_gt_duration_us=self.unbound.force_gt_duration_us,
+                        control_timestep_us=self.unbound.control_timestep_us,
                     ),
                 )
             )
@@ -575,7 +577,7 @@ class EventBasedRollout:
             rollout_duration = time.perf_counter() - rollout_start_time
             ctx = try_get_context()
             if ctx is not None:
-                ctx.rollout_duration.observe(rollout_duration)
+                ctx.record_rollout_duration(rollout_duration)
 
             eval_result = await self._runtime_evaluator.run_evaluation(
                 self.eval_executor
