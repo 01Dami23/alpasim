@@ -2,6 +2,10 @@
 
 ## Dev
 
+The development preset keeps the local one-GPU topology and uses the PAI
+camera request configuration. The delivered-image contract is defined in the
+[PAI sensor contract](/e2e_challenge/README.md#pai-sensor-contract).
+
 Run trusted AlpaSim against an already-running contestant driver:
 
 ```bash

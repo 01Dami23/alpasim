@@ -120,7 +120,12 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
 
     rollout = EventBasedRollout(
         unbound=unbound,
-        data_source=MagicMock(),
+        data_source=SimpleNamespace(
+            rig=SimpleNamespace(
+                recorded_rig_linear_velocities_in_local=None,
+                recorded_rig_linear_accelerations_in_local=None,
+            )
+        ),
         driver=MagicMock(),
         renderer_service=MagicMock(),
         physics=MagicMock(),
@@ -136,8 +141,76 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
     assert state.last_egopose_update_us is None
 
 
+def test_initial_ego_context_uses_recorded_rig_frame_dynamics(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("alpasim_runtime.event_loop.RuntimeEvaluator", MagicMock())
+    monkeypatch.setattr(
+        "alpasim_runtime.event_loop.RouteGenerator.create",
+        MagicMock(return_value=None),
+    )
+
+    timestamps_us = np.array([0, 100_000], dtype=np.uint64)
+    pose_local_to_rig = Pose(
+        np.zeros(3, dtype=np.float32),
+        np.array([0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)], dtype=np.float32),
+    )
+    gt_trajectory = Trajectory.from_poses(
+        timestamps_us,
+        [pose_local_to_rig, pose_local_to_rig],
+    )
+    unbound = SimpleNamespace(
+        egomotion_context_start_us=0,
+        first_policy_timestamp_us=100_000,
+        closed_loop_start_us=300_000,
+        gt_ego_trajectory=gt_trajectory,
+        traffic_objs=TrafficObjects(),
+        planner_delay_us=0,
+        vector_map=None,
+        route_generator_type="RECORDED",
+        route_start_offset_m=0.0,
+        rollout_uuid="rollout",
+        scene_id="scene",
+        save_path_root=str(tmp_path),
+    )
+
+    rollout = EventBasedRollout(
+        unbound=unbound,
+        data_source=SimpleNamespace(
+            rig=SimpleNamespace(
+                recorded_rig_linear_velocities_in_local=np.array(
+                    [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
+                ),
+                recorded_rig_linear_accelerations_in_local=np.array(
+                    [[3.0, 0.0, 0.0], [4.0, 0.0, 0.0]]
+                ),
+            )
+        ),
+        driver=MagicMock(),
+        renderer_service=MagicMock(),
+        physics=MagicMock(),
+        trafficsim=MagicMock(),
+        controller=MagicMock(),
+        camera_catalog=MagicMock(),
+        eval_config=MagicMock(),
+        eval_executor=MagicMock(),
+    )
+
+    np.testing.assert_allclose(
+        rollout.ego_trajectory.dynamics[:, 0:3],
+        [[0.0, -1.0, 0.0], [0.0, -2.0, 0.0]],
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        rollout.ego_trajectory.dynamics[:, 6:9],
+        [[0.0, -3.0, 0.0], [0.0, -4.0, 0.0]],
+        atol=1e-6,
+    )
+
+
 @pytest.mark.asyncio
-async def test_force_gt_physics_blend_holds_first_frame_then_blends(
+async def test_force_gt_physics_blend_extends_through_controller_lookahead(
     simple_trajectory: Trajectory,
 ) -> None:
     rollout = cast(Any, object.__new__(EventBasedRollout))
@@ -147,7 +220,7 @@ async def test_force_gt_physics_blend_holds_first_frame_then_blends(
         render_start_timestamp_us=100_000,
         first_policy_timestamp_us=100_000,
         closed_loop_start_us=300_000,
-        end_timestamp_us=300_000,
+        end_timestamp_us=1_000_000,
         force_gt_duration_us=200_000,
         control_timestep_us=100_000,
         first_camera_frame_ranges_us={
@@ -170,8 +243,20 @@ async def test_force_gt_physics_blend_holds_first_frame_then_blends(
 
     blended = await rollout._build_force_gt_physics_blend_trajectory()
 
-    assert blended.timestamps_us.tolist() == [0, 100_000, 200_000, 300_000]
-    assert blended.positions[:, 2].tolist() == [0.0, 0.0, 5.0, 10.0]
+    assert blended.timestamps_us.tolist() == list(range(0, 1_100_000, 100_000))
+    assert blended.positions[:, 2].tolist() == [
+        0.0,
+        0.0,
+        5.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+    ]
 
 
 @pytest.mark.asyncio
