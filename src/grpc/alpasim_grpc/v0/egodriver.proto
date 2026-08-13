@@ -100,11 +100,19 @@ message DriveRequest {
         fixed64 time_query_us = 2;
     }
 
+    message ActorState {
+        string actor_id = 1;
+        common.Pose pose_local_to_aabb = 2;
+        common.AABB aabb = 3;
+        string actor_label = 4;
+    }
+
     string session_uuid = 1;
 
     fixed64 time_now_us = 3;
     fixed64 time_query_us = 4;
     bytes renderer_data = 5; // optional, can be used to provide the driver arbitrary data produced by the renderer
+    repeated ActorState actor_states = 6; // non-ego actors posed at time_now_us. Empty when disabled
 }
 
 message DriveResponse {
