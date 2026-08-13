@@ -33,9 +33,11 @@ from alpasim_utils.geometry import (
     Pose,
     Trajectory,
     polyline_to_grpc_route,
+    pose_to_grpc,
     trajectory_from_grpc,
     trajectory_to_grpc,
 )
+from alpasim_utils.scenario import TrafficObject
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
@@ -205,7 +207,11 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         )
 
     async def drive(
-        self, time_now_us: int, time_query_us: int, renderer_data: bytes | None
+        self,
+        time_now_us: int,
+        time_query_us: int,
+        renderer_data: bytes | None,
+        actor_states: tuple[tuple[TrafficObject, Pose], ...] = (),
     ) -> tuple[Trajectory | DirectControl | None, bool]:
         """Request a drive decision for the current session.
 
@@ -220,6 +226,15 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             time_now_us=time_now_us,
             time_query_us=time_query_us,
             renderer_data=renderer_data or b"",
+            actor_states=[
+                DriveRequest.ActorState(
+                    actor_id=obj.track_id,
+                    pose_local_to_aabb=pose_to_grpc(pose),
+                    aabb=obj.aabb.to_grpc(),
+                    actor_label=obj.label_class,
+                )
+                for obj, pose in actor_states
+            ],
         )
 
         await session_info.broadcaster.broadcast(LogEntry(driver_request=request))

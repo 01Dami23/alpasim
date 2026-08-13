@@ -139,10 +139,16 @@ class PolicyEvent(RecurringEvent):
             return
 
         # --- Driver query ---
+        actor_states = tuple(
+            (obj, obj.trajectory.interpolate_pose(step_start_us))
+            for obj in state.traffic_objs.values()
+            if step_start_us in obj.trajectory.time_range_us
+        )
         decision, terminate_session = await svc.driver.drive(
             time_now_us=step_start_us,
             time_query_us=target_time_us,
             renderer_data=state.data_sensorsim_to_driver,
+            actor_states=actor_states,
         )
         state.data_sensorsim_to_driver = None  # Consumed
 
