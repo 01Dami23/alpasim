@@ -1,0 +1,55 @@
+[
+  {
+    "targets": [
+      "127.0.1.1:6000"
+    ],
+    "labels": {
+      "run_uuid": "b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "run_name": "LR-b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "user": "damiano",
+      "node": "damiano-kesai",
+      "slurm_job_id": "",
+      "job": "alpasim-runtime-worker",
+      "component": "runtime"
+    }
+  },
+  {
+    "targets": [
+      "127.0.1.1:6002"
+    ],
+    "labels": {
+      "run_uuid": "b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "run_name": "LR-b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "user": "damiano",
+      "node": "damiano-kesai",
+      "slurm_job_id": "",
+      "job": "alpasim-node"
+    }
+  },
+  {
+    "targets": [
+      "127.0.1.1:6003"
+    ],
+    "labels": {
+      "run_uuid": "b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "run_name": "LR-b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "user": "damiano",
+      "node": "damiano-kesai",
+      "slurm_job_id": "",
+      "job": "alpasim-process"
+    }
+  },
+  {
+    "targets": [
+      "127.0.1.1:6004"
+    ],
+    "labels": {
+      "run_uuid": "b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "run_name": "LR-b5f3b169-b14c-4b29-8e07-5ff80e616182",
+      "user": "damiano",
+      "node": "damiano-kesai",
+      "slurm_job_id": "",
+      "job": "alpasim-dcgm"
+    }
+  }
+]
