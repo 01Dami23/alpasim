@@ -410,6 +410,8 @@ eval:
     render_video: True
     video_layouts: ["DEFAULT"] # ["DEFAULT", "REASONING_OVERLAY"]
     camera_id_to_render: camera_front_wide_120fov
+    camera_ids_to_render: null
+    render_driver_bev: False
     reasoning_text_refresh_interval_s: 1.0 # for reasoning overlay layout only
     overlay_plans_on_camera: True
     render_every_nth_frame: 1

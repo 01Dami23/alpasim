@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
+import io
 import logging
 import os
 import traceback
@@ -13,6 +14,7 @@ import matplotlib.style as mplstyle
 import matplotlib.transforms as transforms
 import numpy as np
 import polars as pl
+from PIL import Image
 from tqdm import tqdm
 
 from eval.aggregation import processing
@@ -160,34 +162,102 @@ def render_video_from_eval_result(
         return False
 
 
-def _setup_fig() -> tuple[plt.Figure, dict[str, plt.Axes]]:
-    fig = plt.figure(figsize=(9, 10))
+def _setup_fig(
+    camera_ids: list[str],
+    show_driver_bev: bool = False,
+) -> tuple[plt.Figure, dict[str, plt.Axes]]:
+    wide = len(camera_ids) > 1 or show_driver_bev
+    fig = plt.figure(figsize=(16, 7.5) if wide else (9, 10))
     fig.subplots_adjust(
         left=0.01, right=0.99, bottom=0.01, top=0.97, wspace=0.03, hspace=0.03
     )
 
-    gs = gridspec.GridSpec(
+    outer = gridspec.GridSpec(
         nrows=2,
-        ncols=2,
+        ncols=1,
         figure=fig,
-        width_ratios=[1, 0.5],
-        height_ratios=[1, 1],
+        height_ratios=[1.4, 1.0] if wide else [1, 1],
     )
-    axs = {}
-    axs["map"] = fig.add_subplot(gs[0, 0])
-    axs["table"] = fig.add_subplot(gs[0, 1])
-    axs["image"] = fig.add_subplot(gs[1, 0:2])
-    # axs["plans"] = fig.add_subplot(gs[1, 2])
-    axs["map"].set_xticks([])
-    axs["map"].set_yticks([])
-    axs["table"].set_xticks([])
-    axs["table"].set_yticks([])
-    axs["image"].set_xticks([])
-    axs["image"].set_yticks([])
 
+    top_widths = ([1.0] if show_driver_bev else []) + [1.0, 1.6 if wide else 0.5]
+    top = gridspec.GridSpecFromSubplotSpec(
+        1, len(top_widths), subplot_spec=outer[0], width_ratios=top_widths, wspace=0.03
+    )
+    bottom = gridspec.GridSpecFromSubplotSpec(
+        1, len(camera_ids), subplot_spec=outer[1], wspace=0.01
+    )
+
+    axs = {}
+    column = 0
+    if show_driver_bev:
+        axs["driver_bev"] = fig.add_subplot(top[0, column])
+        column += 1
+    axs["map"] = fig.add_subplot(top[0, column])
+    axs["table"] = fig.add_subplot(top[0, column + 1])
+    for index, camera_id in enumerate(camera_ids):
+        axs[f"image::{camera_id}"] = fig.add_subplot(bottom[0, index])
+
+    for ax in axs.values():
+        ax.set_xticks([])
+        ax.set_yticks([])
     axs["map"].set_aspect("equal")
-    # axs["plans"].set_aspect("equal")
+    if show_driver_bev:
+        axs["driver_bev"].set_aspect("equal")
     return fig, axs
+
+
+def _resolve_camera_ids(sim_result: SimulationResult, cfg: EvalConfig) -> list[str]:
+    primary = cfg.video.camera_id_to_render
+    requested = list(cfg.video.camera_ids_to_render or [primary])
+    if primary not in requested:
+        requested.append(primary)
+    available = sim_result.cameras.camera_by_logical_id
+    resolved = [camera_id for camera_id in requested if camera_id in available]
+    missing = [camera_id for camera_id in requested if camera_id not in available]
+    if missing:
+        logger.warning("Cameras not in the rollout, skipping: %s", missing)
+    if primary not in resolved:
+        raise KeyError(
+            f"Camera {primary} to render is not in the rollout; "
+            f"available: {sorted(available)}"
+        )
+    return resolved
+
+
+# Flat grey for a BEV pane with no fresh frame: unmistakably "no data", where
+# a held frame would read as a scene that stopped moving.
+_BEV_BLANK_LEVEL = 235
+
+
+def _has_driver_bev(sim_result: SimulationResult) -> bool:
+    """Whether the rollout carried any driver BEV frames."""
+    return bool(sim_result.driver_responses.driver_bev_jpegs)
+
+
+def _render_driver_bev(
+    sim_result: SimulationResult,
+    ax: plt.Axes,
+    time: int,
+    artist: plt.Artist | None,
+    max_age_us: int | None,
+) -> plt.Artist | None:
+    frame = None
+    jpeg = sim_result.driver_responses.get_driver_bev_for_time(time, max_age_us)
+    if jpeg:
+        try:
+            frame = np.asarray(Image.open(io.BytesIO(jpeg)).convert("RGB"))
+        except Exception as exc:  # a corrupt debug frame must not kill the render
+            logger.warning("Failed to decode driver BEV frame at %d: %s", time, exc)
+    if frame is None:
+        if artist is None:
+            return None
+        frame = np.full_like(np.asarray(artist.get_array()), _BEV_BLANK_LEVEL)
+    if artist is None:
+        artist = ax.imshow(frame)
+        ax.set_autoscale_on(False)
+    else:
+        artist.set_data(frame)
+    return artist
 
 
 def _list_in_dict_in_dict_to_list(
@@ -425,20 +495,47 @@ def create_video_animation(
         Tuple of (animation, fps).
     """
     timestamps_us = sim_result.timestamps_us
-    camera = sim_result.cameras.camera_by_logical_id[cfg.video.camera_id_to_render]
+    camera_ids = _resolve_camera_ids(sim_result, cfg)
+    cameras = {
+        camera_id: sim_result.cameras.camera_by_logical_id[camera_id]
+        for camera_id in camera_ids
+    }
+    camera = cameras[cfg.video.camera_id_to_render]
     shapely_map = ShapelyMap.from_vec_map(sim_result.vec_map)
     should_render_table = processed_metrics_dfs.df_wide_avg_t.shape[0] > 0
 
-    fig, axs = _setup_fig()
+    driver_bev_artist = None
+    bev_max_age_us = None
+    show_driver_bev = cfg.video.render_driver_bev and _has_driver_bev(sim_result)
+    if cfg.video.render_driver_bev and not show_driver_bev:
+        logger.info("No driver BEV frames in the driver responses; hiding that pane.")
+    if show_driver_bev:
+        # Hold a frame for two of the driver's own publishing intervals: enough
+        # to cover an off-cadence video frame, short enough that a driver which
+        # stops blanks the pane rather than freezing it.
+        interval_us = sim_result.driver_responses.driver_bev_interval_us()
+        bev_max_age_us = None if interval_us is None else 2 * interval_us
+
+    fig, axs = _setup_fig(camera_ids, show_driver_bev=show_driver_bev)
+    axs["image"] = axs[f"image::{cfg.video.camera_id_to_render}"]
+
+    for camera_id, camera_for_id in cameras.items():
+        camera_ax = axs[f"image::{camera_id}"]
+        first = camera_for_id.image_at_time(timestamps_us[0])
+        camera_for_id.render_image_at_time(timestamps_us[0], camera_ax)
+        if first is not None:
+            camera_ax.set_xlim(0, first.size[0])
+            camera_ax.set_ylim(first.size[1], 0)
+            camera_ax.set_autoscale_on(False)
+        if len(camera_ids) > 1:
+            camera_ax.set_title(camera_id, fontsize=6, pad=2)
 
     first_image = camera.image_at_time(timestamps_us[0])
-    img_w = first_image.size[0] if first_image else None
-    img_h = first_image.size[1] if first_image else None
-    camera.render_image_at_time(timestamps_us[0], axs["image"])
-    if img_w is not None and img_h is not None:
-        axs["image"].set_xlim(0, img_w)
-        axs["image"].set_ylim(img_h, 0)
-        axs["image"].set_autoscale_on(False)
+    if show_driver_bev:
+        driver_bev_artist = _render_driver_bev(
+            sim_result, axs["driver_bev"], timestamps_us[0], None, bev_max_age_us
+        )
+        axs["driver_bev"].set_title("driver BEV", fontsize=6, pad=2)
 
     overlay_enabled = cfg.video.overlay_plans_on_camera
     camera_projector: CameraProjector | None = None
@@ -631,7 +728,10 @@ def create_video_animation(
     def update(time: int) -> list[plt.Artist]:
         if should_render_table:
             update_table(table, processed_metrics_dfs, time)
-        camera_artist = camera.render_image_at_time(time, axs["image"])
+        camera_artists = [
+            cameras[camera_id].render_image_at_time(time, axs[f"image::{camera_id}"])
+            for camera_id in camera_ids
+        ]
 
         ego_transform = get_ego_transform(
             sim_result=sim_result,
@@ -748,20 +848,29 @@ def create_video_animation(
             )
 
         all_artists = _list_in_dict_in_dict_to_list(artists_on_map)
-        all_artists.append(camera_artist)
+        all_artists.extend(a for a in camera_artists if a is not None)
         all_artists.extend(overlay_artists)
         if should_render_table:
             all_artists.append(table)
         all_artists.append(text_artist)
         all_artists.append(command_text_artist)
-        # Keep camera axis locked to image extent
-        if camera_artist is not None:
-            array = camera_artist.get_array()
+        if show_driver_bev:
+            nonlocal driver_bev_artist
+            driver_bev_artist = _render_driver_bev(
+                sim_result, axs["driver_bev"], time, driver_bev_artist, bev_max_age_us
+            )
+            if driver_bev_artist is not None:
+                all_artists.append(driver_bev_artist)
+        for camera_id, artist in zip(camera_ids, camera_artists, strict=True):
+            if artist is None:
+                continue
+            array = artist.get_array()
             if array is not None:
                 h, w = array.shape[:2]
-                axs["image"].set_xlim(0, w)
-                axs["image"].set_ylim(h, 0)
-                axs["image"].set_autoscale_on(False)
+                camera_ax = axs[f"image::{camera_id}"]
+                camera_ax.set_xlim(0, w)
+                camera_ax.set_ylim(h, 0)
+                camera_ax.set_autoscale_on(False)
         return all_artists
 
     timestamps_to_render_us = timestamps_us[:: cfg.video.render_every_nth_frame]
