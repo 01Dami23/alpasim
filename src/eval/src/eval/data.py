@@ -608,6 +608,8 @@ class DriverResponses:
     # Disabled by default because unstructured debug info is pickle-encoded
     # driver-controlled data. Trusted callers can opt in explicitly.
     parse_unstructured_debug_info: bool = False
+    driver_bev_timestamps_us: list[int] = dataclasses.field(default_factory=list)
+    driver_bev_jpegs: list[bytes] = dataclasses.field(default_factory=list)
     artists: dict[str, list[plt.Artist]] | None = None
     camera_artists_by_ax: dict[int, dict[str, list[plt.Artist] | plt.Artist | None]] = (
         dataclasses.field(default_factory=dict)
@@ -620,6 +622,7 @@ class DriverResponses:
         assert (
             len(self.timestamps_us) == 0 or query_time_us > self.timestamps_us[-1]
         ), "Driver responses must be added in chronological order"
+        self._add_driver_bev(driver_response, now_time_us)
         if len(driver_response.trajectory.poses) == 0:
             # Empty trajectory happens in first few timesteps
             return
@@ -635,6 +638,43 @@ class DriverResponses:
                 parse_unstructured_debug_info=self.parse_unstructured_debug_info,
             )
         )
+
+    def _add_driver_bev(self, driver_response: DriveResponse, now_time_us: int) -> None:
+        """Record this tick's driver BEV frame, if it carries one."""
+        extra = DriverResponseAtTime._extract_debug_extra(
+            driver_response,
+            parse_unstructured_debug_info=self.parse_unstructured_debug_info,
+        )
+        if extra is None or not isinstance(extra.get("driver_bev_jpeg"), bytes):
+            return
+        self.driver_bev_timestamps_us.append(now_time_us)
+        self.driver_bev_jpegs.append(extra["driver_bev_jpeg"])
+
+    def driver_bev_interval_us(self) -> int | None:
+        """Median gap between driver BEV frames; None with fewer than two."""
+        if len(self.driver_bev_timestamps_us) < 2:
+            return None
+        return int(np.median(np.diff(self.driver_bev_timestamps_us)))
+
+    def get_driver_bev_for_time(
+        self, time: int, max_age_us: int | None = None
+    ) -> bytes | None:
+        """Newest driver BEV frame at or before `time`; None before the first.
+
+        A frame is held for `max_age_us` so an off-cadence video frame still
+        has a picture. Past that the driver has stopped publishing, and holding
+        would show a frozen scene beside a map and cameras that keep moving --
+        which reads as a stuck teacher rather than as missing data. Unbounded
+        when `max_age_us` is None.
+        """
+        if not self.driver_bev_timestamps_us:
+            return None
+        idx = np.searchsorted(self.driver_bev_timestamps_us, time, side="right") - 1
+        if idx < 0:
+            return None
+        if max_age_us is not None and time - self.driver_bev_timestamps_us[idx] > max_age_us:
+            return None
+        return self.driver_bev_jpegs[idx]
 
     def render_at_time(
         self,

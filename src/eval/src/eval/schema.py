@@ -84,6 +84,8 @@ class VideoRendererConfig:
     video_layouts: list[VideoLayout] = MISSING
     # Which camera to render (logical id)
     camera_id_to_render: str = MISSING
+    camera_ids_to_render: list[str] | None = None
+    render_driver_bev: bool = False
     # Whether to overlay planner trajectories onto the camera view
     overlay_plans_on_camera: bool = True
     # Order and inclusion of metrics in the rendered table; None shows all metrics.
