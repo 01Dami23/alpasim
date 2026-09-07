@@ -20,6 +20,7 @@ from eval.aggregation.processing import ProcessedMetricDFs
 from eval.data import CameraProjector, ScenarioEvalInput, SimulationResult
 from eval.schema import EvalConfig, MapElements, VideoLayout
 from eval.video_data import ShapelyMap
+from eval.video_presentation import render_presentation_video
 from eval.video_reasoning_overlay_utils import render_reasoning_overlay_style_video
 
 logger = logging.getLogger("alpasim.eval.video")
@@ -102,6 +103,14 @@ def render_and_save_video(
                 writer="ffmpeg",
             )
             plt.close(anim._fig)
+        elif video_layout == VideoLayout.PRESENTATION:
+            # Clean map + camera inset, for showing a rollout outside the team.
+            logger.info("Using presentation style video rendering")
+            render_presentation_video(
+                sim_result=simulation_result,
+                cfg=cfg,
+                output_path=output_path,
+            )
         else:
             raise ValueError(f"Unknown video layout: {video_layout}")
 

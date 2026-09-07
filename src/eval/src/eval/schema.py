@@ -62,6 +62,9 @@ class VideoLayout(StrEnum):
     # Reasoning overlay view: first-person camera with reasoning text overlay
     #   + trajectory chart on right.
     REASONING_OVERLAY = "reasoning_overlay"
+    # Presentation view: the drivable surface as one filled shape, the camera as
+    # an inset, no debug overlays. For showing a rollout outside the team.
+    PRESENTATION = "presentation"
 
 
 @dataclass
