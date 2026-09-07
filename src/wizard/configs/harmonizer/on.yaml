@@ -1,0 +1,37 @@
+# @package _global_
+#
+# Enable the NRE diffusion harmonizer. Use with `+harmonizer=on`.
+#
+# Ported 2026-09-07 from the thesis checkout (0.91.0) onto this one (0.111.0):
+# the command list is THIS repo's renderer command verbatim plus
+# "--enable-harmonizer", because the two versions differ in the cache-dir and
+# max-workers defines. Keep it in sync when base_config's renderer command moves.
+#
+# It changes rendered appearance, so training and evaluation must BOTH have it --
+# scoring a model trained on non-harmonized renders against harmonized ones
+# measures a distribution gap, not the model. For presentation videos that does
+# not apply: nothing is scored, the images are just cleaner.
+#
+# Costs ~4.2x render time (0.345 s vs 0.082 s mean, measured 2026-08-25 on par2)
+# and pulls harmonizer_nontemporal.pt from HuggingFace on first use, into the
+# renderer's $HOME under ALPASIM_NRE_RUNFILES_ROOT (so it is cached across jobs
+# when that root is on NFS).
+#
+# This exists as a config group because the equivalent CLI override
+# (++services.renderer.command=[...]) fails Hydra's override grammar: the list
+# contains {port}, ** and = which the lexer rejects.
+services:
+  renderer:
+    command:
+      - "${defines.renderer_entrypoint}"
+      - "serve-grpc"
+      - "--port={port}"
+      - "--host=0.0.0.0"
+      - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
+      - "--egocar-hood-dir=/mnt/ego-hoods"
+      - "--no-enable-nrend"
+      - "--enable-harmonizer"
+      - "--download-cache-dir /tmp/nre-cache-dir"
+      - "--cache-size=${defines.nre_cache_size}"
+      - "--max-workers=${defines.nre_max_workers}"
+      - "--enable-editing-actors"
