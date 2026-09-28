@@ -116,6 +116,7 @@ def unified_metrics_df() -> pl.DataFrame:
         ("dist_traveled_m", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
         ("gt_dist_traveled_m", "last", [10.0, 10.0, 10.0]),
         ("dist_to_gt_trajectory", "max", [0.0, 0.0, 0.0]),
+        ("left_corridor_laterally", "max", [0.0, 0.0, 0.0]),
         ("progress", "last", [0.1, 0.5, 0.8]),
         ("progress_rel_to_total", "last", [0.1, 0.5, 0.8]),
         ("progress_rel", "min", [0.9, 0.8, 0.8]),
@@ -828,6 +829,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             ("img_is_black", "max", [0.0, 0.0, 0.0]),
             ("dist_traveled_m", "last", [0.0, 10.0, 100.0]),
             ("dist_to_gt_trajectory", "max", [0.0, 11.0, 11.0]),
+            ("left_corridor_laterally", "max", [0.0, 0.0, 0.0]),
             ("progress", "last", [0.0, 0.0, 1.0]),
             ("progress_rel_to_total", "last", [0.0, 0.0, 1.0]),
             ("progress_rel", "min", [1.0, 0.0, 1.0]),
@@ -949,6 +951,8 @@ class TestAggregateAndWriteMetricsResultsTxt:
             "collision_at_fault": None,
             "offroad": None,
             "dist_to_gt_trajectory": None,
+            "lateral_dist_to_gt_trajectory": None,
+            "left_corridor_laterally": None,
             "gt_dist_traveled_m": None,
         }
 
