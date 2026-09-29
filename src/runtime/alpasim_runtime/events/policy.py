@@ -62,9 +62,9 @@ class PolicyEvent(RecurringEvent):
         svc = self.services
 
         # --- Step boundary: fill timing on existing StepContext ---
-        assert state.step_context is not None, (
-            "StepContext must exist before PolicyEvent (created by StepEvent)"
-        )
+        assert (
+            state.step_context is not None
+        ), "StepContext must exist before PolicyEvent (created by StepEvent)"
         state.step_context.step_start_us = step_start_us
         state.step_context.target_time_us = target_time_us
         state.step_context.force_gt = target_time_us in state.unbound.force_gt_period

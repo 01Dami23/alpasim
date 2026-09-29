@@ -36,12 +36,12 @@ class ControllerEvent(RecurringEvent):
 
         # --- Sanity checks ---
         assert ctx is not None, "StepContext missing — PolicyEvent did not run"
-        assert ctx.step_start_us == self.timestamp_us, (
-            f"StepContext timestamp mismatch: {ctx.step_start_us} != {self.timestamp_us}"
-        )
-        assert (ctx.driver_trajectory is None) != (ctx.direct_control is None), (
-            "PolicyEvent must set exactly one driver decision"
-        )
+        assert (
+            ctx.step_start_us == self.timestamp_us
+        ), f"StepContext timestamp mismatch: {ctx.step_start_us} != {self.timestamp_us}"
+        assert (ctx.driver_trajectory is None) != (
+            ctx.direct_control is None
+        ), "PolicyEvent must set exactly one driver decision"
 
         # --- Controller + vehicle model ---
         ctx.ego_true, ctx.ego_estimated = await self._run_controller(state)
