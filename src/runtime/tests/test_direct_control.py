@@ -81,10 +81,11 @@ def test_controller_request_selects_direct_control() -> None:
         pose_local_to_rig=Pose.identity(),
         rig_linear_velocity_in_rig=np.zeros(3),
         rig_angular_velocity_in_rig=np.zeros(3),
+        rig_linear_acceleration_in_rig=np.zeros(3),
         rig_reference_trajectory_in_rig=None,
         direct_control=control,
         future_us=100_000,
-        force_gt=False,
+        coerce_dynamic_state=False,
     )
 
     assert request.WhichOneof("command") == "direct_control"
