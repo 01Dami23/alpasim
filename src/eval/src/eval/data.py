@@ -672,7 +672,10 @@ class DriverResponses:
         idx = np.searchsorted(self.driver_bev_timestamps_us, time, side="right") - 1
         if idx < 0:
             return None
-        if max_age_us is not None and time - self.driver_bev_timestamps_us[idx] > max_age_us:
+        if (
+            max_age_us is not None
+            and time - self.driver_bev_timestamps_us[idx] > max_age_us
+        ):
             return None
         return self.driver_bev_jpegs[idx]
 
