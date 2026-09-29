@@ -21,6 +21,7 @@ from alpasim_runtime.events.policy import (
 )
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_utils.geometry import DynamicTrajectory, Polyline, Pose, Trajectory
+from alpasim_utils.scenario import AABB, TrafficObject
 
 # ---------------------------------------------------------------------------
 # PolicyEvent tests
@@ -67,6 +68,44 @@ class TestPolicyEvent:
         call_kwargs = mock_driver.drive.call_args.kwargs
         assert call_kwargs["time_now_us"] == 200_000
         assert call_kwargs["time_query_us"] == 300_000
+
+    @pytest.mark.asyncio
+    async def test_run_sends_present_actors_posed_at_the_step(
+        self,
+        policy_event: PolicyEvent,
+        rollout_state: RolloutState,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        """Actors whose trajectory covers the step are passed to drive(), posed
+        at the step time; actors outside their trajectory's time range are not."""
+        rollout_state.traffic_objs["car"] = TrafficObject(
+            track_id="car",
+            aabb=AABB(4.5, 2.0, 1.6),
+            trajectory=simple_trajectory,
+            is_static=False,
+            label_class="automobile",
+        )
+        rollout_state.traffic_objs["gone"] = TrafficObject(
+            track_id="gone",
+            aabb=AABB(4.5, 2.0, 1.6),
+            trajectory=simple_trajectory.clip(0, 100_001),
+            is_static=False,
+            label_class="automobile",
+        )
+        mock_driver.drive.return_value = (
+            simple_trajectory.clip(200_000, 300_001),
+            False,
+        )
+
+        await policy_event.run(rollout_state, EventQueue())
+
+        actor_states = mock_driver.drive.call_args.kwargs["actor_states"]
+        assert [obj.track_id for obj, _ in actor_states] == ["car"]
+        ((_, pose),) = actor_states
+        np.testing.assert_allclose(
+            pose.vec3, simple_trajectory.interpolate_pose(200_000).vec3
+        )
 
     @pytest.mark.asyncio
     async def test_first_run_submits_full_initial_egomotion_context(

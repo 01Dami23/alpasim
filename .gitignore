@@ -29,6 +29,7 @@ data/alpackages/*
 data/huggingface
 data/vavam-driver
 data/trafficsim-models/
+data/prometheus/
 outputs/
 artifacts/
 asset_harvesting/

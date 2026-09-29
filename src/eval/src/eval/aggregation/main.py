@@ -4,6 +4,7 @@
 """Post-eval aggregation: Aggregating results across all array jobs."""
 
 import argparse
+import json
 import logging
 import os
 import pathlib
@@ -433,6 +434,12 @@ def main() -> int:
         help="Directory containing array job results",
     )
     parser.add_argument("--config_path", type=str)
+    parser.add_argument(
+        "--failed_rollouts",
+        type=str,
+        help="JSON list of rollouts that failed without metrics (run_name, run_uuid, "
+        "clipgt_id, rollout_id, error); each is scored 0, as in the runtime path",
+    )
 
     args = parser.parse_args()
     array_job_dir = pathlib.Path(args.array_job_dir)
@@ -459,8 +466,13 @@ def main() -> int:
     )
 
     aggregate_dir = array_job_dir / "aggregate"
+    failed_rollouts = (
+        json.loads(pathlib.Path(args.failed_rollouts).read_text())
+        if args.failed_rollouts
+        else None
+    )
 
-    _run_aggregation_core(job_dirs, aggregate_dir, cfg)
+    _run_aggregation_core(job_dirs, aggregate_dir, cfg, failed_rollouts=failed_rollouts)
 
     return 0
 
