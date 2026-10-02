@@ -16,6 +16,18 @@ from trajdata.maps import vec_map_elements
 from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
 
+# nuPlan road-area polygons that should share a boundary can have tiny gaps from
+# floating-point map geometry. Close seams narrower than 2 mm before checking
+# whether the ego footprint is covered.
+ROAD_AREA_SEAM_CLOSURE_M = 0.001
+
+# The road-area KD-tree indexes existing polygon boundary vertices rather than
+# polygon interiors or densified edges. The private nuPlan competition maps
+# contain long boundary segments whose nearest vertex can be just over 19 m
+# from an ego that is still inside the area. Keep enough margin for the 4 m
+# evaluation corridor while retaining the existing 3D/elevation-aware query.
+ROAD_AREA_QUERY_DIST_M = 25.0
+
 
 def _get_center_line_yaw_at_projection(
     center_line: shapely.LineString, point: shapely.Point, eps: float = 0.01
@@ -34,7 +46,7 @@ def _get_center_line_yaw_at_projection(
 
 
 def _repair_polygonal_geometry(geom: BaseGeometry) -> BaseGeometry:
-    """Return valid polygonal geometry for map lanes.
+    """Return valid polygonal geometry for map elements.
 
     Some lane boundaries produce slightly self-intersecting rings. GEOS
     operations such as unary_union can throw TopologyException on those
@@ -81,6 +93,120 @@ def _get_lane_polygon(
         return _repair_polygonal_geometry(
             shapely.LineString(lane.center.points[..., :2]).buffer(road_width_m / 2)
         )
+
+
+# Road-edge polylines are compared against the ego footprint in 2D, so any
+# structure stacked above or below the roadway (an overpass deck, a ramp) is
+# flattened onto it and reads as a road edge the ego is touching. Candidate
+# edges are therefore restricted to those at a comparable elevation to the ego.
+# Observed on clipgt-0509bba5 / clipgt-321982bf, where a deck +8.05 m / +6.19 m
+# overhead produced a single-frame offroad flag while the ego was exactly on the
+# recorded human trajectory (the nearest ground-level edge was 4.6 m away).
+MAX_ROAD_EDGE_ELEVATION_DELTA_M = 3.0
+ROAD_EDGE_QUERY_DIST_M = 30.0
+
+
+def _closest_road_edge_distance_2d(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    ego_polygon: BaseGeometry,
+) -> float:
+    """2D distance from the ego footprint to the nearest same-level road edge.
+
+    Mirrors the previous ``get_closest_road_edge`` behaviour -- pick the single
+    3D-nearest edge, then measure in 2D -- but restricts the candidates to
+    edges at the ego's own elevation. Elevation is taken from the edge vertex
+    closest to the ego in plan view, so edges that climb (ramps) are judged by
+    the part beside the ego rather than by their overall height.
+
+    Taking the minimum over *all* same-level edges instead was measured on the
+    966-rollout force-GT run: it cleared the same 6 scenes but newly failed 2,
+    so the single-nearest-edge semantics are kept deliberately.
+
+    Returns ``inf`` when no road edge within ``ROAD_EDGE_QUERY_DIST_M`` lies
+    within ``MAX_ROAD_EDGE_ELEVATION_DELTA_M`` of the ego, i.e. there is no
+    kerb at the ego's level for it to be touching.
+    """
+    ego_xyz = np.asarray(ego_xyzh[..., :3], dtype=float).reshape(3)
+    ego_xy, ego_z = ego_xyz[:2], float(ego_xyz[2])
+
+    closest_distance = float("inf")
+    closest_3d = float("inf")
+    for road_edge in simulation_result.vec_map.get_road_edges_within(
+        ego_xyz, ROAD_EDGE_QUERY_DIST_M
+    ):
+        points = np.asarray(road_edge.polyline.points)
+        nearest_vertex = int(
+            np.argmin(np.linalg.norm(points[..., :2] - ego_xy, axis=-1))
+        )
+        if (
+            abs(float(points[nearest_vertex, 2]) - ego_z)
+            > MAX_ROAD_EDGE_ELEVATION_DELTA_M
+        ):
+            continue
+        distance_3d = float(
+            np.linalg.norm(points[nearest_vertex, :3].astype(float) - ego_xyz)
+        )
+        if distance_3d < closest_3d:
+            closest_3d = distance_3d
+            closest_distance = shapely.geometry.LineString(points[..., :2]).distance(
+                ego_polygon
+            )
+    return closest_distance
+
+
+def _has_map_element_kdtree(
+    simulation_result: SimulationResult,
+    elem_type: vec_map_elements.MapElementType,
+) -> bool:
+    search_kdtrees = getattr(simulation_result.vec_map, "search_kdtrees", None)
+    return search_kdtrees is not None and elem_type in search_kdtrees
+
+
+def _road_areas_near_ego(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    query_dist_m: float = ROAD_AREA_QUERY_DIST_M,
+) -> list[vec_map_elements.RoadArea] | None:
+    if not _has_map_element_kdtree(
+        simulation_result, vec_map_elements.MapElementType.ROAD_AREA
+    ):
+        return None
+
+    return simulation_result.vec_map.get_road_areas_within(
+        ego_xyzh[..., :3], query_dist_m
+    )
+
+
+def _road_area_union(
+    simulation_result: SimulationResult,
+    road_areas: list[vec_map_elements.RoadArea],
+) -> BaseGeometry:
+    polygons = [
+        _repair_polygonal_geometry(
+            simulation_result.vec_map.get_road_area_polygon_2d(area.id)
+        )
+        for area in road_areas
+    ]
+    road_area_union = _repair_polygonal_geometry(shapely.ops.unary_union(polygons))
+    return road_area_union.buffer(ROAD_AREA_SEAM_CLOSURE_M).buffer(
+        -ROAD_AREA_SEAM_CLOSURE_M
+    )
+
+
+def _is_offroad_using_road_area(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    ego_polygon: BaseGeometry,
+) -> bool | None:
+    road_areas = _road_areas_near_ego(simulation_result, ego_xyzh)
+    if road_areas is None:
+        return None
+    if not road_areas:
+        return True
+
+    road_area_union = _road_area_union(simulation_result, road_areas)
+    return not road_area_union.covers(ego_polygon)
 
 
 def _compute_off_lane(
@@ -211,17 +337,28 @@ class OffRoadScorer(Scorer):
                 offroad.append(False)
                 continue
 
-            # Check if we're too close to the road edge. This will still miss
-            # offroad cases when we're far outside the road - but then either
-            # we started offroad or we had to go offroad at some point.
-            closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
-                xyz=res["ego_xyzh"][..., :3]
-            ).polyline.xy
-
-            distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
-                ego_polygon
-            )
-            offroad.append(distance < 1e-3)
+            if not _has_map_element_kdtree(
+                simulation_result, vec_map_elements.MapElementType.ROAD_EDGE
+            ):
+                # The nuPlan dataset, for example, doesn't have road edges, but it does have road areas.
+                road_area_offroad = _is_offroad_using_road_area(
+                    simulation_result,
+                    res["ego_xyzh"],
+                    ego_polygon,
+                )
+                offroad.append(
+                    False if road_area_offroad is None else road_area_offroad
+                )
+            else:
+                # Check if we're too close to the road edge. This will still miss
+                # offroad cases when we're far outside the road - but then either
+                # we started offroad or we had to go offroad at some point.
+                # Only edges at the ego's own elevation count; see
+                # _closest_road_edge_distance_2d.
+                distance = _closest_road_edge_distance_2d(
+                    simulation_result, res["ego_xyzh"], ego_polygon
+                )
+                offroad.append(distance < 1e-3)
         return [
             MetricReturn(
                 name="offroad",
