@@ -308,6 +308,7 @@ runtime:
     n_rollouts: 1 # how many rollouts to simulate for that scenario
     force_gt_duration_us: 1_700_000 # 1.7s
     skip_driver_during_force_gt: false # When true, force-GT warmup does not call driver.drive
+    save_rollout_log: true # Write rollout.asl; needed only for offline re-scoring, replay and videos
     # When enabled, force-GT camera frames are cached on shared storage and
     # replayed across rollouts/runs instead of being re-rendered every time
     # (sensorsim renderer only). cache_dir must point at a shared, writable

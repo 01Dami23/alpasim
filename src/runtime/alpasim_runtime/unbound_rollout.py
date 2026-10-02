@@ -179,6 +179,7 @@ class UnboundRollout:
     end_timestamp_us: int
     force_gt_duration_us: int
     skip_driver_during_force_gt: bool
+    save_rollout_log: bool
     use_cached_frames_during_force_gt: bool
     force_gt_frame_cache_extra_key: str | None
     physics_update_mode: PhysicsUpdateMode
@@ -329,6 +330,7 @@ class UnboundRollout:
             end_timestamp_us=timing.end_timestamp_us,
             force_gt_duration_us=simulation_config.force_gt_duration_us,
             skip_driver_during_force_gt=simulation_config.skip_driver_during_force_gt,
+            save_rollout_log=simulation_config.save_rollout_log,
             use_cached_frames_during_force_gt=(
                 simulation_config.force_gt_frame_cache.enabled
             ),

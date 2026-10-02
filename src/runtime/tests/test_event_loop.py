@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
+from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_runtime.event_loop import EventBasedRollout, create_event_rollout
 from alpasim_runtime.events.base import Event, SimulationEndEvent
 from alpasim_runtime.events.policy import PolicyEvent
@@ -116,6 +117,7 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
         rollout_uuid="rollout",
         scene_id="scene",
         save_path_root=str(tmp_path),
+        save_rollout_log=True,
     )
 
     rollout = EventBasedRollout(
@@ -134,6 +136,56 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
     assert rollout.ego_trajectory_estimate.timestamps_us.tolist() == [0, 100_000]
     state = rollout._create_rollout_state()
     assert state.last_egopose_update_us is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_rollout_log", [True, False])
+async def test_rollout_log_is_written_only_when_enabled(
+    simple_trajectory: Trajectory,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    save_rollout_log: bool,
+) -> None:
+    monkeypatch.setattr(
+        "alpasim_runtime.event_loop.RuntimeEvaluator",
+        MagicMock(return_value=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.event_loop.RouteGenerator.create",
+        MagicMock(return_value=None),
+    )
+    unbound = SimpleNamespace(
+        egomotion_context_start_us=0,
+        first_policy_timestamp_us=100_000,
+        closed_loop_start_us=300_000,
+        gt_ego_trajectory=simple_trajectory,
+        traffic_objs=TrafficObjects(),
+        planner_delay_us=0,
+        vector_map=None,
+        route_generator_type="RECORDED",
+        route_start_offset_m=0.0,
+        rollout_uuid="rollout",
+        scene_id="scene",
+        save_path_root=str(tmp_path),
+        save_rollout_log=save_rollout_log,
+    )
+    rollout = EventBasedRollout(
+        unbound=unbound,
+        data_source=MagicMock(),
+        driver=MagicMock(),
+        renderer_service=MagicMock(),
+        physics=MagicMock(),
+        trafficsim=MagicMock(),
+        controller=MagicMock(),
+        camera_catalog=MagicMock(),
+        eval_config=MagicMock(),
+        eval_executor=MagicMock(),
+    )
+
+    async with rollout.broadcaster:
+        await rollout.broadcaster.broadcast(LogEntry())
+
+    assert (tmp_path / "rollout" / "rollout.asl").exists() == save_rollout_log
 
 
 @pytest.mark.asyncio

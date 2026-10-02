@@ -313,6 +313,10 @@ class SimulationConfig:
     start_time_offset_us: int = 0
     force_gt_duration_us: int = 500_000  # 0.5s
     skip_driver_during_force_gt: bool = False
+    # Write every message of a rollout, camera frames included, to
+    # <rollout>/rollout.asl. Only offline tools (re-scoring, replay, videos) read
+    # it back, so runs that need none of them can turn it off.
+    save_rollout_log: bool = True
     # Shared on-disk cache of deterministic force-GT camera frames, reused across
     # rollouts instead of re-rendering them. See ``ForceGtFrameCacheConfig``.
     force_gt_frame_cache: ForceGtFrameCacheConfig = field(
