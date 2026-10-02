@@ -33,3 +33,9 @@ def test_autoresume_mark_complete_and_remove_incomplete(tmp_path):
     remove_incomplete_rollouts(tmp_path, SCENE_ID)
     num_dirs_after_remove = len(os.listdir(scene_dir))
     assert num_dirs_after_remove == 1
+
+
+def test_mark_complete_creates_the_rollout_dir(tmp_path):
+    # A rollout without its rollout.asl has no directory until it completes.
+    mark_rollout_complete(tmp_path / "scene_id", "uuid_1")
+    assert find_num_complete_rollouts(tmp_path, "scene_id") == 1

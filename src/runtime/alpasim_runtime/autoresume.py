@@ -31,6 +31,8 @@ def mark_rollout_complete(save_path_root: str, batch_uuid: str) -> None:
         batch_uuid,
         TRACKER_FILE_NAME,
     )
+    # Without a rollout log nothing else may have created the directory.
+    os.makedirs(os.path.dirname(marker_file), exist_ok=True)
     # touch the file to mark the session as complete. allow existing file to be overwritten
     with open(marker_file, "w"):
         pass

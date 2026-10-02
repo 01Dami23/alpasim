@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import LogEntry, RolloutMetadata
 from alpasim_runtime.autoresume import mark_rollout_complete
-from alpasim_runtime.broadcaster import MessageBroadcaster
+from alpasim_runtime.broadcaster import MessageBroadcaster, MessageHandler
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import PhysicsUpdateMode
 from alpasim_runtime.delay_buffer import DelayBuffer
@@ -137,8 +137,6 @@ class EventBasedRollout:
         context_start_us = self.unbound.egomotion_context_start_us
         first_policy_timestamp_us = self.unbound.first_policy_timestamp_us
 
-        asl_log_writer = LogWriter(file_path=self._asl_log_path())
-
         # Seed all recorded ego context through the first policy decision.
         # The first policy call then receives dense egomotion history rather
         # than a synthetic two-point shortcut.
@@ -184,9 +182,10 @@ class EventBasedRollout:
             vector_map=self.unbound.vector_map,
         )
 
-        self.broadcaster = MessageBroadcaster(
-            handlers=[asl_log_writer, self._runtime_evaluator],
-        )
+        handlers: list[MessageHandler] = [self._runtime_evaluator]
+        if self.unbound.save_rollout_log:
+            handlers.insert(0, LogWriter(file_path=self._asl_log_path()))
+        self.broadcaster = MessageBroadcaster(handlers=handlers)
 
     def _rollout_dir(self) -> str:
         return os.path.join(self.unbound.save_path_root, self.unbound.rollout_uuid)
