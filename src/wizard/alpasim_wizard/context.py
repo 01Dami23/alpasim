@@ -213,9 +213,14 @@ class WizardContext:
 
 
 def _is_port_open(port: int) -> bool:
-    """Check if a port is available (not in use)."""
+    """Check if a port can be bound on all interfaces, as the services will bind it."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("localhost", port)) != 0
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+        return True
 
 
 def _find_next_open_port(start_port: int, max_search: int = 1000) -> int:

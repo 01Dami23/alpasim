@@ -331,8 +331,12 @@ class SlurmEnrootDeployment(SlurmDeployment):
         port = self.context.telemetry_ports.process_exporter
         deadline = time.monotonic() + _HOST_EXPORTER_START_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError("Host process exporter exited during startup")
+            exit_code = process.poll()
+            if exit_code is not None:
+                raise RuntimeError(
+                    f"Host process exporter exited during startup (port {port}, "
+                    f"exit code {exit_code}); see txt-logs/os_dispatch_output.txt"
+                )
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):
                     return

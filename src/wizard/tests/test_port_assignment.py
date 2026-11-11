@@ -82,6 +82,29 @@ class TestPortAssignment(unittest.TestCase):
         finally:
             server_socket.close()
 
+    def test_skip_port_listening_on_non_loopback_interface(self) -> None:
+        """A listener bound to a non-loopback address must still block the port."""
+        baseport = 35000
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            try:
+                probe.connect(("10.255.255.255", 1))  # no packet is sent
+                hostname_ip = probe.getsockname()[0]
+            except OSError:
+                self.skipTest("no non-loopback address available")
+        if hostname_ip.startswith("127."):
+            self.skipTest("no non-loopback address available")
+
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server_socket.bind((hostname_ip, baseport))
+            server_socket.listen(1)
+
+            port_iter = create_port_assigner(baseport)
+            self.assertEqual(next(port_iter), baseport + 1)
+        finally:
+            server_socket.close()
+
     def test_max_ports_limit(self) -> None:
         """Test that max 1000 ports are assigned."""
         baseport = 33000

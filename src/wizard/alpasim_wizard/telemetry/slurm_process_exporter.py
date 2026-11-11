@@ -332,7 +332,10 @@ def main() -> None:
     parser.add_argument("--cache-seconds", default=5.0, type=float)
     args = parser.parse_args()
 
-    server = MetricsServer(("0.0.0.0", args.port), MetricsHandler)
+    try:
+        server = MetricsServer(("0.0.0.0", args.port), MetricsHandler)
+    except OSError as e:
+        raise SystemExit(f"cannot bind process exporter to 0.0.0.0:{args.port}: {e}") from e
     server.job_id = args.job_id
     server.procfs = args.procfs
     server.cgroupfs = args.cgroupfs
