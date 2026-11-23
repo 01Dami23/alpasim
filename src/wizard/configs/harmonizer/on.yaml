@@ -1,0 +1,35 @@
+# @package _global_
+#
+# Enable the NRE diffusion harmonizer, which official e2e-challenge evaluation
+# runs -- the Alpamayo 1.5 and Qwen-Drive baseline runs both have it on.
+#
+# It changes rendered appearance, so training and evaluation should BOTH have
+# it: scoring a model trained on non-harmonized renders against harmonized ones
+# measures a distribution gap, not the model. Enabling it on one side only is a
+# deliberate diagnostic, not a headline number.
+#
+# Costs ~4.2x render time and pulls harmonizer_nontemporal.pt from HuggingFace on
+# first use. That lands in the renderer's $HOME under ALPASIM_NRE_RUNFILES_ROOT,
+# so with the runfiles root on NFS it is cached across jobs.
+#
+# This exists as a config group because the equivalent CLI override
+# (++services.renderer.command=[...]) fails Hydra's override grammar: the list
+# contains {port}, ** and = which the lexer rejects.
+#
+# The command below must stay in step with services.renderer.command in
+# base_config.yaml; it is that list plus --enable-harmonizer.
+services:
+  renderer:
+    command:
+      - "${defines.renderer_entrypoint}"
+      - "serve-grpc"
+      - "--port={port}"
+      - "--host=0.0.0.0"
+      - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
+      - "--egocar-hood-dir=/mnt/ego-hoods"
+      - "--no-enable-nrend"
+      - "--enable-harmonizer"
+      - "--download-cache-dir /tmp/nre-cache-dir"
+      - "--cache-size=${defines.nre_cache_size}"
+      - "--max-workers=${defines.nre_max_workers}"
+      - "--enable-editing-actors"
